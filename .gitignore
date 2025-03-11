@@ -1,0 +1,4 @@
+
+# ignore archive folder
+./archive/*
+*.ipynb
