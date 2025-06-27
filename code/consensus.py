@@ -18,20 +18,21 @@ from Bio.SeqRecord import SeqRecord
 from Bio.Align import MultipleSeqAlignment # Corrected import
 from collections import Counter
 
-def get_consensus_scores(alignment: MultipleSeqAlignment, num_sequences: int, alignment_length: int, n_most_common: int = 0) -> List[Tuple[str, float]]:
+def get_consensus_scores(alignment: MultipleSeqAlignment, num_sequences: int, alignment_length: int, n_most_common_rank: int = 0) -> List[Tuple[str, float]]:
     """
-    Calculates conservation scores for each position in an alignment.
+    Calculates conservation scores for each position in an alignment based on the Nth most common residue.
 
     Args:
         alignment (MultipleSeqAlignment): The input alignment.
         num_sequences (int): Number of sequences in the alignment.
         alignment_length (int): Length of the alignment.
-        n_most_common (int): Index for selecting the n-th most common residue (0 for the top one).
+        n_most_common_rank (int): Rank of the most common residue to consider (0 for the most common,
+                                  1 for the second most common, etc.).
 
     Returns:
         List[Tuple[str, float]]: A list of tuples, where each tuple contains the
-                                 most common residue and its conservation score (percentage)
-                                 for a position.
+                                 Nth most common residue and its conservation score (percentage)
+                                 for that position.
     """
     scores: List[Tuple[str, float]] = []
     if num_sequences == 0: # Avoid division by zero
@@ -41,18 +42,24 @@ def get_consensus_scores(alignment: MultipleSeqAlignment, num_sequences: int, al
         column = [record.seq[i] for record in alignment]
         residue_counts = Counter(column)
 
-        if not residue_counts: # Handle empty column case, though unlikely in valid MSA
-            top_residue = '-'
+        selected_residue: str
+        identical_count: int
+
+        if not residue_counts: # Handle empty column case
+            selected_residue = '-'
             identical_count = 0
-        elif len(residue_counts) <= n_most_common: # If fewer unique residues than n_most_common
-             top_residue = residue_counts.most_common(1)[0][0] # Fallback to the absolute most common
-             identical_count = column.count(top_residue)
+        elif len(residue_counts) <= n_most_common_rank:
+            # Fallback to the actual most common if not enough unique residues for the requested rank
+            selected_residue = residue_counts.most_common(1)[0][0]
+            print(f"Warning: Position {i} has fewer than {n_most_common_rank + 1} unique residues. Falling back to most common: '{selected_residue}'.")
+            identical_count = column.count(selected_residue)
         else:
-            top_residue = residue_counts.most_common(n_most_common + 1)[n_most_common][0]
-            identical_count = column.count(top_residue)
+            # Get the (n_most_common_rank)-th residue (0-indexed)
+            selected_residue = residue_counts.most_common(n_most_common_rank + 1)[n_most_common_rank][0]
+            identical_count = column.count(selected_residue)
 
         score = (identical_count / num_sequences) * 100
-        scores.append((top_residue, score))
+        scores.append((selected_residue, score))
     return scores
 
 def get_conserved_alignment(
@@ -107,6 +114,8 @@ def main():
                         help='Optional: Path to save the conservative statistics dictionary as a JSON file.')
     parser.add_argument('--conserved_residue_threshold', type=float, default=90.0,
                         help='Threshold for printing specific conserved residues. Default: 90.0')
+    parser.add_argument('--nth_common_rank', type=int, default=0,
+                        help='Rank of residue to use for consensus (0=most common, 1=second most, etc.). Default: 0')
 
     args = parser.parse_args()
 
@@ -129,11 +138,14 @@ def main():
     print(f"Alignment length: {alignment_length}")
 
     # Calculate consensus scores and the consensus sequence string
-    # The original script used n_res=0 for get_cons_scores, which means taking the most common.
-    consensus_scores: List[Tuple[str, float]] = get_consensus_scores(alignment, num_sequences, alignment_length, n_most_common=0)
+    consensus_scores: List[Tuple[str, float]] = get_consensus_scores(
+        alignment, num_sequences, alignment_length, n_most_common_rank=args.nth_common_rank
+    )
 
     consensus_sequence_str = "".join([score_pair[0] for score_pair in consensus_scores])
-    print(f"Consensus sequence: {consensus_sequence_str}")
+
+    consensus_type_str = "Primary" if args.nth_common_rank == 0 else f"{args.nth_common_rank + 1}th-Rank"
+    print(f"{consensus_type_str} Consensus sequence: {consensus_sequence_str}")
 
     if args.save_consensus:
         output_dir = os.path.dirname(args.consensus_outfile)
@@ -147,10 +159,11 @@ def main():
 
         try:
             with open(args.consensus_outfile, "w") as f: # Use "w" to overwrite or create new
-                f.write(f">consensus_{os.path.basename(args.align_file.name)}\n{consensus_sequence_str}\n")
-            print(f"Consensus sequence saved to: {args.consensus_outfile}")
+                header_suffix = f"_rank{args.nth_common_rank}" if args.nth_common_rank > 0 else ""
+                f.write(f">consensus{header_suffix}_{os.path.basename(args.align_file.name)}\n{consensus_sequence_str}\n")
+            print(f"{consensus_type_str} Consensus sequence saved to: {args.consensus_outfile}")
         except IOError as e:
-            print(f"Error writing consensus sequence to {args.consensus_outfile}: {e}")
+            print(f"Error writing {consensus_type_str.lower()} consensus sequence to {args.consensus_outfile}: {e}")
 
 
     conservative_statistics: Dict[str, Any] = {}

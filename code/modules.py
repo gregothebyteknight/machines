@@ -231,3 +231,89 @@ def define_site(df_row: pd.Series, pos1_label: str = '28', pos2_label: str = '12
         return '(K|R)-_group'
 
     return site_map.get(seq_pair, 'other')
+
+# ==============================================================================
+# Visualization Utilities
+# ==============================================================================
+
+def generate_itol_simple_annotation(
+    data_df: pd.DataFrame,
+    id_column: str,
+    value_column: str,
+    output_filepath: str,
+    dataset_label: str,
+    color: str = "#ff0000",
+    field_shape: int = 1, # 1 for rectangle, 2 for circle, 3 for star, etc.
+    margin: int = 0,
+    separator: str = "TAB" # TAB, COMMA, SPACE
+) -> bool:
+    """
+    Generates a simple iTOL annotation file (DATASET_SIMPLEBAR or similar text-based).
+    This format can be used for simple bar charts, color strips, or binary annotations.
+
+    Args:
+        data_df (pd.DataFrame): DataFrame containing the data.
+        id_column (str): Name of the column in data_df with IDs matching tree leaf names.
+        value_column (str): Name of the column in data_df with values to annotate.
+        output_filepath (str): Path to save the iTOL annotation file.
+        dataset_label (str): Label for this dataset in iTOL.
+        color (str): Default color for annotations (hex code, e.g., "#ff0000").
+        field_shape (int): Shape code for the field (default 1 for rectangle).
+        margin (int): Margin for the dataset (default 0).
+        separator (str): Separator for the output file ('TAB', 'COMMA', 'SPACE').
+
+    Returns:
+        bool: True if successful, False otherwise.
+    """
+    if id_column not in data_df.columns:
+        print(f"Error: ID column '{id_column}' not found in DataFrame.")
+        return False
+    if value_column not in data_df.columns:
+        print(f"Error: Value column '{value_column}' not found in DataFrame.")
+        return False
+
+    sep_char_map = {"TAB": "\\t", "COMMA": ",", "SPACE": " "}
+    sep_char = sep_char_map.get(separator.upper(), "\\t")
+
+    header_lines = [
+        "DATASET_SIMPLE", # Indicates a simple text-based annotation. Can be used for color strips/labels.
+        f"SEPARATOR {separator.upper()}",
+        f"DATASET_LABEL{sep_char}{dataset_label}",
+        f"COLOR{sep_char}{color}",
+        # The following are often used for DATASET_BINARY or specific simple types.
+        # For truly simple text labels or color strips, some might be optional.
+        f"FIELD_COLORS{sep_char}{color}", # Color for the field if only one
+        f"FIELD_SHAPES{sep_char}{field_shape}", # Shape for the field
+        f"FIELD_LABELS{sep_char}{value_column}", # Label for the field in legend
+        f"LEGEND_TITLE{sep_char}{dataset_label}",
+        f"LEGEND_SHAPES{sep_char}{field_shape}",
+        f"LEGEND_COLORS{sep_char}{color}",
+        f"LEGEND_LABELS{sep_char}{dataset_label}",
+        f"MARGIN{sep_char}{margin}",
+        "DATA" # Start of data block
+    ]
+
+    try:
+        with open(output_filepath, 'w') as outfile:
+            for line in header_lines:
+                outfile.write(line + "\\n")
+
+            for _, row in data_df.iterrows():
+                leaf_id = str(row[id_column])
+                value = str(row[value_column])
+                # For DATASET_SIMPLE, it's often just ID<sep>value (e.g. value is a color or a simple label)
+                # If value is meant to be a color, it should be a hex code.
+                # If it's a category, iTOL might assign colors or you'd use DATASET_COLORSTRIP
+                # This implementation assumes `value` is a direct textual annotation or a numeric value
+                # that iTOL might use for bar height if this file is interpreted as DATASET_SIMPLEBAR.
+                # For basic labeling/coloring, this is often ID<sep>color_or_label.
+                # The notebook example uses it for general text data, let's stick to ID<sep>Value
+                outfile.write(f"{leaf_id}{sep_char}{value}\\n")
+        print(f"iTOL annotation file '{output_filepath}' created successfully.")
+        return True
+    except IOError as e:
+        print(f"Error writing iTOL annotation file to {output_filepath}: {e}")
+        return False
+    except KeyError as e:
+        print(f"Error accessing DataFrame column for iTOL annotation: {e}")
+        return False

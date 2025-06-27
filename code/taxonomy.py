@@ -15,7 +15,7 @@ from typing import Dict, Any, IO, List
 import pandas as pd
 import os # For path manipulation
 
-from modules import get_lineage, tax_filt, tree_tax
+from modules import get_lineage, tax_filt, tree_tax, generate_itol_simple_annotation
 
 # Standard taxonomic ranks often encountered. The order matters for mapping.
 # NCBITaxa output might include higher levels like "cellular organisms" or "root" at the beginning.
@@ -38,6 +38,12 @@ def main():
                         help='Optional: Filename for the exported taxonomy CSV. If not provided, a name is generated based on --get_tax.')
     parser.add_argument('--filter_kingdom', type=str, default="Bacteria",
                         help='Kingdom to filter by (e.g., "Bacteria", "Archaea", "Viruses"). Set to empty string "" to disable kingdom filtering. Default: "Bacteria"')
+    parser.add_argument('--make_itol_annotation', type=str, default=None,
+                        help='Column name from the taxonomy table to use for iTOL simple annotation (e.g., "phylum"). Requires --protid_column_name to be set if not "protid".')
+    parser.add_argument('--itol_output_file', type=str, default="itol_simple_annotation.txt",
+                        help='Filename for the iTOL annotation file. Will be saved in --output_dir. Default: itol_simple_annotation.txt')
+    parser.add_argument('--protid_column_name', type=str, default="protid",
+                        help='Name of the column containing protein IDs (for matching tree leaves in iTOL annotation). Default: "protid"')
 
 
     args = parser.parse_args()
@@ -199,6 +205,27 @@ def main():
             print(f"Available columns for export: { [col for col in tax_tab.columns if col in STANDARD_RANKS or col == 'taxid'] }")
             print(f"All available columns: {tax_tab.columns.tolist()}")
 
+    # GENERATE ITOL ANNOTATION FILE
+    if args.make_itol_annotation:
+        annotation_value_column = args.make_itol_annotation
+        if args.protid_column_name not in tax_tab.columns:
+            print(f"Error: Protein ID column '{args.protid_column_name}' not found in table for iTOL annotation.")
+        elif annotation_value_column not in tax_tab.columns:
+            print(f"Error: Annotation value column '{annotation_value_column}' not found in table for iTOL annotation.")
+            print(f"Available columns: {tax_tab.columns.tolist()}")
+        else:
+            itol_file_path = os.path.join(args.output_dir, args.itol_output_file)
+            print(f"\nGenerating iTOL simple annotation file for column '{annotation_value_column}'...")
+            # Using a default color for now, can be made configurable
+            # The generate_itol_simple_annotation function handles file writing and error messages.
+            generate_itol_simple_annotation(
+                data_df=tax_tab,
+                id_column=args.protid_column_name,
+                value_column=annotation_value_column,
+                output_filepath=itol_file_path,
+                dataset_label=f"{annotation_value_column}_annotation",
+                color="#0000FF" # Example color: Blue
+            )
 
 if __name__ == '__main__':
     main()
