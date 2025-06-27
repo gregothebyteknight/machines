@@ -2,18 +2,28 @@
 # IMPORT LIBRARIES
 import re
 import os
+from typing import List, Dict, Any, IO
 import ete3
 import pandas as pd
+from Bio.Align import MultipleSeqAlignment
+from Bio.SeqRecord import SeqRecord
 
-def tax_filt(tax_tab):
-    """
-    This function filters the tax_tab DataFrame by kingdom and 
-    returns a DataFrame with only the prot_id and taxid columns
+# ==============================================================================
+# Taxonomy Utilities
+# ==============================================================================
 
-    @tax_tab(pd.DataFrame): DataFrame with the taxid data
+def tax_filt(tax_tab: pd.DataFrame) -> pd.DataFrame:
     """
-    # List of patterns to remove from the taxonomy column
-    patterns = [
+    Filters a DataFrame containing taxonomy information by removing specified patterns
+    from the 'taxonomy' column.
+
+    Args:
+        tax_tab (pd.DataFrame): DataFrame with taxonomic data, expecting a 'taxonomy' column.
+
+    Returns:
+        pd.DataFrame: The DataFrame with cleaned 'taxonomy' column.
+    """
+    patterns: List[str] = [
         'FCB group,',
         'TACK group,',
         'Bacteroidota/Chlorobiota group,',
@@ -31,108 +41,193 @@ def tax_filt(tax_tab):
         'Leptolyngbya group,'
     ]
 
-    # Create a regex pattern to remove all the patterns at once
-    pattern_regex = '|'.join(map(re.escape, patterns))
-    # Remove the patterns from the taxonomy column
-    tax_tab['taxonomy'] = tax_tab['taxonomy'].str.replace(pattern_regex, '', regex = True)
+    pattern_regex: str = '|'.join(map(re.escape, patterns))
+    # Ensure 'taxonomy' column is string type before replace
+    tax_tab['taxonomy'] = tax_tab['taxonomy'].astype(str).str.replace(pattern_regex, '', regex=True)
     return tax_tab
 
-def get_lineage(tax):
-  """
-  This function returns the lineage of a taxon given its taxid
+def get_lineage(tax_id: int) -> str:
+    """
+    Retrieves the full taxonomic lineage for a given NCBI taxon ID.
 
-  @tax(int): taxid of the taxon
-  """
-  ncbi = ete3.NCBITaxa()
-  lineage = ncbi.get_lineage(tax)
-  lineage_serie = pd.Series(ncbi.get_taxid_translator(lineage), name = tax)
-  return ",".join(lineage_serie[lineage].values)
+    Args:
+        tax_id (int): The NCBI taxon ID.
 
-def tree_tax(tree_path, tax_dict):
-    tree = ete3.Tree(tree_path.name, format = 3)
+    Returns:
+        str: A comma-separated string representing the lineage.
+             Returns an empty string if lineage retrieval fails.
+    """
+    try:
+        ncbi = ete3.NCBITaxa()
+        lineage_ids: List[int] = ncbi.get_lineage(tax_id)
+        if lineage_ids is None:
+            return ""
+        lineage_translator: Dict[int, str] = ncbi.get_taxid_translator(lineage_ids)
+        lineage_names: List[str] = [lineage_translator[taxid] for taxid in lineage_ids if taxid in lineage_translator]
+        return ",".join(lineage_names)
+    except Exception as e:
+        print(f"Error retrieving lineage for taxid {tax_id}: {e}")
+        return ""
+
+# ==============================================================================
+# Tree Utilities
+# ==============================================================================
+
+def tree_tax(tree_file: IO[str], tax_dict: Dict[str, Any], output_dir: str = "../data") -> str:
+    """
+    Updates leaf names in a phylogenetic tree based on a taxonomy dictionary
+    and writes the modified tree to a new file.
+
+    Args:
+        tree_file (IO[str]): An open file object for the input tree file (e.g., Newick format).
+        tax_dict (Dict[str, Any]): Dictionary mapping original leaf names to new names (e.g., taxids).
+        output_dir (str): Directory to save the modified tree. Defaults to "../data".
+
+    Returns:
+        str: The path to the written tree file.
+    """
+    tree = ete3.Tree(tree_file.name, format=3) # format=3 often means Newick with names & branch lengths
     for leaf in tree:
-        new_id = tax_dict.get(leaf.name, leaf.name)  # If no matching taxid found, keep the original saccver
-        leaf.name = new_id
+        # If no matching taxid found, keep the original name
+        new_id = tax_dict.get(leaf.name, leaf.name)
+        leaf.name = str(new_id) # Ensure name is a string
 
-    # Write the new tree
-    name, ext = os.path.splitext(os.path.basename(tree_path.name))
-    tree.write(outfile = f"../data/tax_{name}{ext}", format = 3)
-    print(f"tax_{name}{ext} created")
+    # Ensure output directory exists
+    try:
+        if not os.path.exists(output_dir): # Check explicitly to print message only when creating
+            os.makedirs(output_dir)
+            # print(f"Created directory for tree output: {output_dir}") # Optional: for debugging
+        # If it already exists, os.makedirs(output_dir, exist_ok=True) would also work silently.
+    except OSError as e:
+        print(f"Error creating directory {output_dir}: {e}")
+        # Depending on desired behavior, could re-raise or return an error indicator
+        return f"ERROR: Could not create directory {output_dir}"
 
-def seq_with_res(align, res_dict):
 
-    # Iterate over the sequences in the alignment
+    base_name = os.path.basename(tree_file.name)
+    name, ext = os.path.splitext(base_name)
+    output_tree_path = os.path.join(output_dir, f"tax_{name}{ext}")
+
+    try:
+        tree.write(outfile=output_tree_path, format=3)
+        print(f"Modified tree created: {output_tree_path}")
+    except Exception as e: # Catching general exception from tree.write
+        print(f"Error writing tree to {output_tree_path}: {e}")
+        return f"ERROR: Could not write tree to {output_tree_path}"
+
+    return output_tree_path
+
+# ==============================================================================
+# Sequence & Motif Utilities
+# ==============================================================================
+
+def seq_with_res(alignment: MultipleSeqAlignment, residue_conditions: Dict[int, str]) -> None:
+    """
+    Identifies and prints sequences in an alignment that match specific residues at given positions.
+
+    Args:
+        alignment (MultipleSeqAlignment): The multiple sequence alignment object.
+        residue_conditions (Dict[int, str]): A dictionary where keys are 0-based
+                                             positions and values are the expected
+                                             single-letter amino acid codes.
+    """
     counter = 0
-    for record in align:
-        seq = str(record.seq)
-        if (
-            seq[pos1] == residue_1 and seq[position_2] == residue_2
-            and seq[position_3] == residue_3 and seq[position_4] == residue_4
-            and seq[position_5] == residue_5 and seq[position_6] == residue_6
-            and seq[position_7] == residue_7 and seq[position_8] == residue_8
-            and seq[position_9] == residue_9 and seq[position_10] == residue_10
-            and seq[position_11] == residue_11):
+    for record in alignment:
+        seq_str = str(record.seq)
+        match = True
+        for position, expected_residue in residue_conditions.items():
+            if position >= len(seq_str) or seq_str[position] != expected_residue:
+                match = False
+                break
+
+        if match:
             counter += 1
-            print(f"Sequence: {seq}")
-            print(f"Name: {record.id}")
+            print(f"Sequence ID: {record.id}")
+            # print(f"Full Sequence: {seq_str}") # Uncomment if full sequence is needed
             print(f"Description: {record.description}")
+            # Print matched residues for verification
+            matched_residues_info = {pos: seq_str[pos] for pos in residue_conditions}
+            print(f"Matched residues at positions: {matched_residues_info}")
             print()  # empty line for readability
-    print(f"Number of sequence fit: {counter}")
+
+    print(f"Number of sequences matching all conditions: {counter}")
 
 
-def motive_table(align):
-    result = []
+def motive_table(alignment: MultipleSeqAlignment, motif_positions: Dict[str, int]) -> pd.DataFrame:
+    """
+    Creates a DataFrame summarizing specific amino acid residues at defined positions
+    for each sequence in a multiple sequence alignment.
 
-    for record in align:
-        new_motif = {'ProteinID':record.id,
+    Args:
+        alignment (MultipleSeqAlignment): The multiple sequence alignment object.
+        motif_positions (Dict[str, int]): A dictionary where keys are labels for the
+                                           positions (e.g., 'H1_pos1') and values are
+                                           the 0-based integer positions in the sequence.
+                                           Example: {'17': 17, '60': 60, ...}
 
-            '17': str(record.seq[17:18]),
-            '60': str(record.seq[60:61]),
-            '61': str(record.seq[61:62]),
+    Returns:
+        pd.DataFrame: A DataFrame where each row corresponds to a sequence,
+                      and columns include 'ProteinID' and the residues at the
+                      specified motif positions.
+    """
+    result_list: List[Dict[str, Any]] = []
 
-            '28': str(record.seq[28:29]),
-            '59': str(record.seq[59:60]),
-            '127' :str(record.seq[127:128]),
+    for record in alignment:
+        seq_str = str(record.seq)
+        current_motif_data: Dict[str, Any] = {'ProteinID': record.id}
 
-            '15': str(record.seq[15:16]),
-            '79': str(record.seq[79:80]),
-            '99': str(record.seq[99:100]),
+        for label, pos_0_indexed in motif_positions.items():
+            if 0 <= pos_0_indexed < len(seq_str):
+                current_motif_data[label] = seq_str[pos_0_indexed]
+            else:
+                current_motif_data[label] = '-' # Use '-' for out-of-bounds positions
 
-            '5': str(record.seq[5:6]),
-            '116': str(record.seq[116:117])
-                            }
-    result.append(new_motif)
-    motif = pd.DataFrame(result)
-    return motif
+        result_list.append(current_motif_data)
 
-def define_site(df):
-    seq = "".join([df['28'], df['127']])
+    motif_df = pd.DataFrame(result_list)
+    return motif_df
 
-    if seq == 'KM' or seq == 'RM':
+def define_site(df_row: pd.Series, pos1_label: str = '28', pos2_label: str = '127') -> str:
+    """
+    Defines a site group based on amino acids at two specified positions in a DataFrame row.
+    The input DataFrame row is expected to be a result from `motive_table`.
+
+    Args:
+        df_row (pd.Series): A row from the DataFrame generated by `motive_table`.
+        pos1_label (str): The column label in df_row for the first position (e.g., '28').
+        pos2_label (str): The column label in df_row for the second position (e.g., '127').
+
+    Returns:
+        str: The site group classification (e.g., '(K|R)M_group', 'other').
+    """
+    # Ensure the labels exist in the Series, otherwise default to a gap '-'
+    res1 = df_row.get(pos1_label, '-')
+    res2 = df_row.get(pos2_label, '-')
+    seq_pair = f"{res1}{res2}"
+
+    # Using a dictionary for cleaner mapping
+    site_map: Dict[str, str] = {
+        'KM': '(K|R)M_group', 'RM': '(K|R)M_group', # Consolidate (K|R)M
+        'KS': '(K|R)S_group', 'RS': '(K|R)S_group', # Consolidate (K|R)S
+        'K-': '(K|R)-_group', 'R-': '(K|R)-_group', # Consolidate (K|R)-
+        'KG': 'KG_group',
+        # 'RM': 'RM_group', # Already covered by (K|R)M_group
+        'RA': 'RA_group',
+        # 'RS': 'RS_group', # Already covered by (K|R)S_group
+        'RG': 'RG_group',
+        'AM': 'AM_group',
+        'AA': 'AA_group',
+        'AS': 'AS_group',
+        'A-': 'A-_group',
+        'AG': 'AG_group'
+    }
+
+    # Special handling for patterns like (K|R)M etc. needs careful ordering or direct check
+    if res1 in ('K', 'R') and res2 == 'M':
         return '(K|R)M_group'
-    elif seq == 'KS' or seq == 'RS':
+    if res1 in ('K', 'R') and res2 == 'S':
         return '(K|R)S_group'
-    elif seq == 'K-' or 'R-':
+    if res1 in ('K', 'R') and res2 == '-':
         return '(K|R)-_group'
-    elif seq == 'KG' or '':
-        return 'KG_group'
-    elif seq == 'RM':
-        return 'RM_group'
-    elif seq == 'RA':
-        return 'RA_group'
-    elif seq == 'RS':
-        return 'RS_group'
-    elif seq == 'RG':
-        return 'RG_group'
-    elif seq == 'AM':
-        return 'AM_group'
-    elif seq == 'AA':
-        return 'AA_group'
-    elif seq == 'AS':
-        return 'AS_group'
-    elif seq == 'A-':
-        return 'A-_group'
-    elif seq == 'AG':
-        return 'AG_group'
-    else:
-        return 'other'
+
+    return site_map.get(seq_pair, 'other')
