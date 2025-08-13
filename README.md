@@ -1,4 +1,4 @@
-# Bioinformatics Analysis Toolkit
+# Bioinformatics Analysis Toolkit for the Polymerase Project
 
 This project provides a suite of Python scripts and Jupyter notebooks for performing common bioinformatics tasks, including sequence alignment analysis, taxonomic data processing, and motif discovery.
 
